@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Admin Metrics Dashboard</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}" />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 0; background: #f9fafb; }
+        header { background: linear-gradient(135deg, #1e3a8a, #2563eb); color: #fff; padding: 32px 24px; }
+        header h1 { margin: 0; font-size: 28px; }
+        header p { margin: 8px 0 0; font-size: 16px; opacity: 0.85; }
+        main { padding: 24px; max-width: 1100px; margin: 0 auto; }
+        .grid { display: grid; gap: 16px; }
+        .grid.metrics { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); margin-bottom: 24px; }
+        .card { background: #fff; border-radius: 14px; padding: 20px; box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08); }
+        .metric-value { font-size: 30px; font-weight: 700; margin-top: 8px; color: #111827; }
+        .metric-label { font-size: 14px; letter-spacing: 0.08em; text-transform: uppercase; color: #6b7280; }
+        .section-title { font-size: 18px; font-weight: 600; margin-bottom: 12px; color: #111827; display: flex; align-items: center; justify-content: space-between; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 10px 12px; border-bottom: 1px solid #e5e7eb; text-align: left; }
+        th { font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: #6b7280; }
+        tr:hover td { background: #f3f4f6; }
+        .actions { display: flex; gap: 12px; margin-top: 16px; }
+        button { background: #2563eb; color: #fff; border: none; border-radius: 8px; padding: 10px 16px; cursor: pointer; font-weight: 600; }
+        button.secondary { background: #e5e7eb; color: #111827; }
+        button:disabled { opacity: 0.6; cursor: not-allowed; }
+        .status { margin-top: 12px; font-size: 13px; color: #ef4444; }
+        footer { margin-top: 32px; font-size: 13px; color: #6b7280; text-align: center; }
+        canvas { width: 100% !important; height: 260px !important; }
+        @media (max-width: 768px) {
+            .grid.charts { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>Taqneeq Admin Dashboard</h1>
+        <p>Monitor user signups, points flow, and top performers in real time.</p>
+    </header>
+    <main>
+        <section class="grid metrics">
+            <div class="card">
+                <div class="metric-label">Total Users</div>
+                <div class="metric-value" id="totalUsers">—</div>
+            </div>
+            <div class="card">
+                <div class="metric-label">Points Minted (Σ)</div>
+                <div class="metric-value" id="pointsMinted">—</div>
+            </div>
+            <div class="card">
+                <div class="metric-label">Points Redeemed (Σ)</div>
+                <div class="metric-value" id="pointsRedeemed">—</div>
+            </div>
+        </section>
+
+        <section class="grid charts" style="grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 20px;">
+            <div class="card">
+                <div class="section-title">
+                    <span>Daily Signups</span>
+                    <select id="signupsRange">
+                        <option value="7">7 days</option>
+                        <option value="14">14 days</option>
+                        <option value="30">30 days</option>
+                    </select>
+                </div>
+                <canvas id="signupsChart"></canvas>
+            </div>
+            <div class="card">
+                <div class="section-title">
+                    <span>Points Minted vs Redeemed</span>
+                    <select id="pointsRange">
+                        <option value="7">7 days</option>
+                        <option value="14">14 days</option>
+                        <option value="30">30 days</option>
+                    </select>
+                </div>
+                <canvas id="pointsChart"></canvas>
+            </div>
+        </section>
+
+        <section class="card" style="margin-top: 24px;">
+            <div class="section-title">
+                <span>Top Users</span>
+                <select id="topUsersLimit">
+                    <option value="5">Top 5</option>
+                    <option value="10" selected>Top 10</option>
+                    <option value="25">Top 25</option>
+                </select>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>User ID</th>
+                        <th>Name</th>
+                        <th>Credits</th>
+                        <th>Role</th>
+                    </tr>
+                </thead>
+                <tbody id="topUsersBody"></tbody>
+            </table>
+        </section>
+
+        <section class="card" style="margin-top: 24px;">
+            <div class="section-title">Exports & Links</div>
+            <div class="actions">
+                <button id="downloadCsv">Download Transactions CSV</button>
+                <a href="{{ url_for('website_routes.route_home') }}" style="text-decoration: none;">
+                    <button type="button" class="secondary">Open Admin Database</button>
+                </a>
+            </div>
+            <div class="status" id="statusMessage"></div>
+        </section>
+
+        <footer>
+            Protect your token. Change the admin password via <code>ADMIN_PASSWORD</code> env variable.
+        </footer>
+    </main>
+
+    <script>
+        const TOKEN_STORAGE_KEY = 'tq_admin_token';
+
+        function promptForToken() {
+            const value = window.prompt('Enter admin password');
+            if (!value) {
+                return null;
+            }
+            return btoa(value.trim());
+        }
+
+        function getToken() {
+            let token = localStorage.getItem(TOKEN_STORAGE_KEY);
+            if (!token) {
+                token = promptForToken();
+                if (token) {
+                    localStorage.setItem(TOKEN_STORAGE_KEY, token);
+                }
+            }
+            return token;
+        }
+
+        function getHeaders() {
+            const token = getToken();
+            if (!token) {
+                throw new Error('Missing admin token');
+            }
+            return { 'TOKEN': token };
+        }
+
+        function formatNumber(value) {
+            if (value === null || value === undefined) return '0';
+            return Number(value).toLocaleString();
+        }
+
+        async function fetchJson(path, params = {}) {
+            const url = new URL(path, window.location.origin);
+            Object.entries(params).forEach(([key, value]) => {
+                if (value !== undefined && value !== null) {
+                    url.searchParams.set(key, value);
+                }
+            });
+            const response = await fetch(url.toString(), { headers: getHeaders() });
+            if (!response.ok) {
+                if (response.status === 401) {
+                    localStorage.removeItem(TOKEN_STORAGE_KEY);
+                }
+                throw new Error(`Request failed: ${response.status}`);
+            }
+            return response.json();
+        }
+
+        async function loadTotals() {
+            try {
+                const [totalUsers, minted, redeemed] = await Promise.all([
+                    fetchJson('/admin/metrics/total_users'),
+                    fetchJson('/admin/metrics/points_minted'),
+                    fetchJson('/admin/metrics/points_redeemed')
+                ]);
+                document.getElementById('totalUsers').textContent = formatNumber(totalUsers.total_users);
+                document.getElementById('pointsMinted').textContent = formatNumber(minted.total);
+                document.getElementById('pointsRedeemed').textContent = formatNumber(redeemed.total);
+            } catch (error) {
+                showStatus(error.message);
+            }
+        }
+
+        let signupsChart;
+        async function loadSignupsChart() {
+            try {
+                const days = document.getElementById('signupsRange').value;
+                const data = await fetchJson('/admin/metrics/daily_signups', { days });
+                const ctx = document.getElementById('signupsChart').getContext('2d');
+                if (signupsChart) { signupsChart.destroy(); }
+                signupsChart = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: data.labels,
+                        datasets: [{
+                            label: 'Signups',
+                            data: data.values,
+                            borderColor: '#2563eb',
+                            backgroundColor: 'rgba(37, 99, 235, 0.15)',
+                            tension: 0.3,
+                            fill: true
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        plugins: { legend: { display: false } },
+                        scales: {
+                            y: { beginAtZero: true, ticks: { precision: 0 } }
+                        }
+                    }
+                });
+            } catch (error) {
+                showStatus(error.message);
+            }
+        }
+
+        let pointsChart;
+        async function loadPointsChart() {
+            try {
+                const days = document.getElementById('pointsRange').value;
+                const [minted, redeemed] = await Promise.all([
+                    fetchJson('/admin/metrics/points_minted', { days }),
+                    fetchJson('/admin/metrics/points_redeemed', { days })
+                ]);
+                const ctx = document.getElementById('pointsChart').getContext('2d');
+                if (pointsChart) { pointsChart.destroy(); }
+                pointsChart = new Chart(ctx, {
+                    type: 'bar',
+                    data: {
+                        labels: minted.series.labels,
+                        datasets: [
+                            {
+                                label: 'Minted',
+                                data: minted.series.values,
+                                backgroundColor: 'rgba(16, 185, 129, 0.7)'
+                            },
+                            {
+                                label: 'Redeemed',
+                                data: redeemed.series.values,
+                                backgroundColor: 'rgba(239, 68, 68, 0.7)'
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        interaction: { mode: 'index', intersect: false },
+                        stacked: false,
+                        scales: {
+                            y: { beginAtZero: true }
+                        }
+                    }
+                });
+            } catch (error) {
+                showStatus(error.message);
+            }
+        }
+
+        async function loadTopUsers() {
+            try {
+                const limit = document.getElementById('topUsersLimit').value;
+                const data = await fetchJson('/admin/metrics/top_users', { limit });
+                const tbody = document.getElementById('topUsersBody');
+                tbody.innerHTML = '';
+                (data.users || []).forEach((user, index) => {
+                    const row = document.createElement('tr');
+                    row.innerHTML = `
+                        <td>${user.unique_id || '—'}</td>
+                        <td>${user.name || '—'}</td>
+                        <td>${formatNumber(user.credits)}</td>
+                        <td>${user.role || 'USER'}</td>
+                    `;
+                    tbody.appendChild(row);
+                });
+                if (!data.users || data.users.length === 0) {
+                    const row = document.createElement('tr');
+                    const cell = document.createElement('td');
+                    cell.colSpan = 4;
+                    cell.textContent = 'No data available';
+                    row.appendChild(cell);
+                    tbody.appendChild(row);
+                }
+            } catch (error) {
+                showStatus(error.message);
+            }
+        }
+
+        function showStatus(message) {
+            const el = document.getElementById('statusMessage');
+            el.textContent = message;
+        }
+
+        async function downloadCsv() {
+            try {
+                const response = await fetch('/admin/transactions/export.csv', { headers: getHeaders() });
+                if (!response.ok) {
+                    throw new Error('Failed to download CSV');
+                }
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'transactions.csv';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                window.URL.revokeObjectURL(url);
+                showStatus('CSV downloaded successfully.');
+            } catch (error) {
+                showStatus(error.message);
+            }
+        }
+
+        document.getElementById('downloadCsv').addEventListener('click', (event) => {
+            event.preventDefault();
+            downloadCsv();
+        });
+
+        document.getElementById('signupsRange').addEventListener('change', loadSignupsChart);
+        document.getElementById('pointsRange').addEventListener('change', loadPointsChart);
+        document.getElementById('topUsersLimit').addEventListener('change', loadTopUsers);
+
+        (async function bootstrap() {
+            try {
+                getHeaders(); // prompt immediately if needed
+                await loadTotals();
+                await loadSignupsChart();
+                await loadPointsChart();
+                await loadTopUsers();
+            } catch (error) {
+                showStatus(error.message);
+            }
+        })();
+    </script>
+</body>
+</html>
+

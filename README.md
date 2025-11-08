@@ -1,184 +1,256 @@
-# FastAPI + PostgreSQL Migration
+# Taqneeq Backend (FastAPI + PostgreSQL)
 
-This backend has been migrated from Flask + Firebase to FastAPI + PostgreSQL.
+This repository hosts the FastAPI backend for the Taqneeq application. The service manages user onboarding, OTP-based auth, credits/transactions, leaderboards, and the admin portal.
 
-## Prerequisites
+The project was migrated from Flask + Firebase to FastAPI + PostgreSQL and now includes a refreshed admin dashboard implementation. The current focus area (owned by **Swaraj**) is the admin metrics and control panel.
 
+---
+
+## 1. Current Status (Swaraj – Admin Panel)
+
+### ✅ Deliverables Completed
+- **Metrics API surface**
+  - `GET /admin/metrics/total_users`
+  - `GET /admin/metrics/daily_signups?days=7`
+  - `GET /admin/metrics/points_minted?days=7`
+  - `GET /admin/metrics/points_redeemed?days=7`
+  - `GET /admin/metrics/top_users?limit=10`
+  - `GET /admin/transactions/export.csv`
+- **Aggregation logic**
+  - User counts, daily signups, minted vs redeemed summaries.
+  - Transaction history flattening for CSV export.
+  - Respects existing admin-token guard (`ADMIN_PASSWORD`, base64).
+- **Dashboard UI**
+  - `templates/dashboard.html` rendered at `/admin/dashboard`.
+  - Chart.js charts for signups and minted vs redeemed.
+  - Time-range selectors, top users table, CSV download button.
+  - Auto-prompt for admin password (stored base64, matches backend guard).
+- **Documentation**
+  - Expanded README (this file) with setup, usage, and testing guidance.
+
+### ⏳ Outstanding Work
+- **Testing / QA**
+  - Manual smoke test with seeded data.
+  - Optional: automated pytest coverage around new aggregation helpers.
+- **Data seeding**
+  - Needs realistic users/transactions from upstream PRs (Aditya & Anushree) to fully exercise charts and CSV.
+
+> Summary: All feature work is complete. Only validation/testing remains.
+
+---
+
+## 2. Getting Started
+
+### Prerequisites
 - Python 3.8+
 - PostgreSQL database
-- Environment variables configured in `.env` file
+- Environment variables supplied via `.env`
 
-## Environment Variables
+### Environment Variables
 
-Create a `.env` file with the following variables:
+Create `.env` in the project root with:
 
 ```env
 # Database
 DATABASE_URL=postgresql://username:password@host:port/database
 
-# Admin
+# Admin portal guard (base64-encoded cleartext)
 ADMIN_PASSWORD=your_admin_password_base64
 ADMIN_PORTAL=/admin
 
-# OTP Service
+# OTP service (if applicable)
 OTP_AUTH_TOKEN=your_otp_auth_token
 
-# Testing
+# Integration testing defaults
 TEST_PHONE_NUMBER=7777777777
 TEST_OTP=123456
 
-# Server
+# Uvicorn server port
 PORT=8000
 ```
 
-## Installation
+> The admin dashboard **requires** the header `TOKEN: <base64(admin_password)>`. The frontend prompts for the cleartext password and stores the base64 token in `localStorage`.
 
-1. Install dependencies:
+### Installation
+
 ```bash
+python -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-2. Initialize the database:
-```bash
-python init_db.py
-```
+### Database Bootstrapping
 
-To drop and recreate all tables (WARNING: This will delete all data):
 ```bash
+# Create tables
+python init_db.py
+
+# Drop & recreate everything (destructive!)
 python init_db.py --drop
 ```
 
-## Running the Application
+The models live in `models/` and use SQLAlchemy. Alembic scaffolding (`alembic/`) is included if migration scripts are added later.
 
-### Development
+### Running the App
+
 ```bash
+# Development
 uvicorn app:app --reload --port 8000
-```
 
-### Production
-```bash
+# Production-style
 uvicorn app:app --host 0.0.0.0 --port 8000
-```
 
-Or use the main script:
-```bash
+# Or via Python entrypoint
 python app.py
 ```
 
-## API Endpoints
+Static assets are served from `static/` and Jinja templates come from `templates/`.
+
+---
+
+## 3. Admin Dashboard Smoke Test (Manual QA)
+
+Testing is the only remaining checklist item. Follow this flow to verify the new functionality end-to-end:
+
+1. **Seed data**
+   - Ensure Aditya’s user model migration is applied (`init_db.py`).
+   - Insert a few users with varying roles and credits.
+   - Create transaction history entries (ALLOCATE/REDEEM) to populate charts.
+   - You can use existing controllers or run custom SQL inserts.
+
+2. **Run the service**
+   ```bash
+   uvicorn app:app --reload --port 8000
+   ```
+
+3. **Authenticate**
+   - Visit `http://localhost:8000/admin/dashboard`.
+   - When prompted, enter the cleartext admin password (same value that was base64-encoded in `.env`).
+
+4. **Verify metrics**
+   - Totals update to match seeded data.
+   - Daily signups chart responds to range selector (7/14/30 days).
+   - Minted vs redeemed bar chart switches ranges correctly.
+   - Top users table honors the limit dropdown.
+
+5. **CSV export**
+   - Click “Download Transactions CSV”.
+   - Confirm the CSV contains flattened transactions with `user_id`, `type`, `amount`, `timestamp`, `performed_by`, `balance`.
+
+6. **Token guard**
+   - Clear local storage, refresh page, ensure prompt reappears.
+   - Try an incorrect password to see the guard returning `401`.
+
+### Optional Automated Tests
+- Extend `tests/` with pytest cases for:
+  - `get_total_users_count`
+  - `get_daily_signups`
+  - `get_points_summary`
+  - `get_transactions_flat`
+- Use factory fixtures to seed temporary data into a transactional test database.
+
+---
+
+## 4. API Overview
+
+The service exposes a wide set of routes; below is a condensed map.
 
 ### Authentication
-- `POST /phone/auth` - Send verification code
-- `POST /phone/verify_code` - Verify OTP code
-- `POST /phone/add_user` - Create user after verification
-- `POST /user/by_email` - Search user by email
-- `POST /user/by_phone` - Search user by phone
+- `POST /phone/auth` – Send verification code
+- `POST /phone/verify_code` – Verify OTP
+- `POST /phone/add_user` – Finalize user creation
+- `POST /user/by_email` – Lookup by email
+- `POST /user/by_phone` – Lookup by phone
 
 ### Users
-- `POST /user/add` - Add new user
-- `PUT /user/update` - Update user profile
-- `DELETE /user/delete` - Delete user profile
-- `GET /user/profile/{unique_id}` - Get user profile
+- `POST /user/add`
+- `PUT /user/update`
+- `DELETE /user/delete`
+- `GET /user/profile/{unique_id}`
 
 ### Credits
-- `POST /points/allocate` - Allocate points to user
-- `POST /points/redeem` - Redeem points
-- `POST /transactions/history` - Get transaction history
-- `GET /leaderboard?limit=10` - Get leaderboard
+- `POST /points/allocate`
+- `POST /points/redeem`
+- `POST /transactions/history`
+- `GET /leaderboard?limit=10`
 
-### Admin (Requires TOKEN header)
-- `GET /admin/users?sort=ascending` - Get all users
-- `PUT /admin/points/update` - Update user points
-- `POST /admin/users/add` - Add user (admin)
-- `DELETE /admin/users/{user_id}` - Remove user
-- `PUT /admin/users/role` - Change user role
+### Admin (TOKEN header required)
+- `GET /admin/users?sort=ascending`
+- `PUT /admin/points/update`
+- `POST /admin/users/add`
+- `DELETE /admin/users/{user_id}`
+- `PUT /admin/users/role`
+- `GET /admin/metrics/total_users`
+- `GET /admin/metrics/daily_signups?days=7`
+- `GET /admin/metrics/points_minted?days=7`
+- `GET /admin/metrics/points_redeemed?days=7`
+- `GET /admin/metrics/top_users?limit=10`
+- `GET /admin/transactions/export.csv`
 
-### Data
-- `GET /schedule` - Get schedule data
-- `GET /items` - Get items data
-- `GET /events` - Get events data
+### Data / Misc
+- `GET /schedule`
+- `GET /items`
+- `GET /events`
 
-### Website (Admin Portal)
-- `GET {ADMIN_PORTAL}/` - Home page with user list
-- `GET {ADMIN_PORTAL}/user/add` - Add user form
-- `POST {ADMIN_PORTAL}/user/add` - Submit new user
-- `GET {ADMIN_PORTAL}/user/{user_id}` - User details page
-- `POST {ADMIN_PORTAL}/user/points/update` - Update user points
-- `POST {ADMIN_PORTAL}/user/balance/update` - Update user balance
-- `POST {ADMIN_PORTAL}/user/role/update` - Update user role
-- `POST {ADMIN_PORTAL}/user/delete` - Delete user
-- `GET {ADMIN_PORTAL}/user/{user_id}/transactions` - Get user transactions
+### Admin Portal (Website)
+- `GET {ADMIN_PORTAL}/` – Home (user list)
+- `GET {ADMIN_PORTAL}/dashboard` – Metrics dashboard (new)
+- `GET {ADMIN_PORTAL}/user/add` – Add user form
+- `POST {ADMIN_PORTAL}/user/add` – Submit new user
+- `GET {ADMIN_PORTAL}/user/{user_id}` – User details
+- `POST {ADMIN_PORTAL}/user/points/update` – Adjust points
+- `POST {ADMIN_PORTAL}/user/balance/update` – Adjust balance
+- `POST {ADMIN_PORTAL}/user/role/update` – Change role
+- `POST {ADMIN_PORTAL}/user/delete` – Delete user
+- `GET {ADMIN_PORTAL}/user/{user_id}/transactions` – Transaction history
 
-## Database Schema
+---
 
-### Users Table
-- `unique_id` (PK) - User unique identifier
-- `first_name` - User first name
-- `last_name` - User last name
-- `email` - User email (unique)
-- `phone_number` - User phone number (unique)
-- `role` - User role (USER, SALES, ADMIN)
-- `credits` - User credit points
-- `balance` - User balance (for SALES role)
-- `referral_code` - Unique referral code
-- `referred_by` - Array of referrer IDs
-- `referrals` - Array of referred user IDs
-- `transaction_history` - JSON array of transactions
-- `created_at` - Timestamp
-- `updated_at` - Timestamp
+## 5. Database Snapshot
 
-### PhoneAuth Table
-- `verification_id` (PK) - Verification identifier
-- `phone_number` - Phone number
-- `otp` - One-time password
-- `verified` - Verification status
-- `attempts` - Number of attempts
-- `created_at` - Timestamp
-- `expires_at` - Expiration timestamp
-- `verified_at` - Verification timestamp
-- `token` - Verification token
+### `users_sql` table (`UserDB`)
+- `unique_id` (string) – External identifier (primary business key)
+- `first_name`, `last_name`
+- `email`, `phone_number`
+- `role` – Enum (`USER`, `SALES`, `ADMIN`)
+- `credits`, `balance`
+- `transaction_history` – JSON array (used by admin metrics)
+- `referral_code`, `referred_by[]`, `referrals[]`
+- `created_at` – used for daily signup chart
 
-### Cache Table
-- `key` (PK) - Cache key
-- `value` - JSON cache value
-- `last_updated` - Last update timestamp
-- `created_at` - Creation timestamp
+### `credit_transactions` table (`CreditTransaction`)
+- Persists atomic allocate/redeem events (used by credits module)
+- Currently not required for dashboard but available for future enhancements
 
-## Migration Notes
+### `cache` table (`CacheDB`)
+- Used by leaderboard controller for 45-second TTL caching
 
-### Key Changes
-1. **Database**: Firebase Firestore → PostgreSQL
-2. **Framework**: Flask → FastAPI
-3. **ORM**: Firebase Admin SDK → SQLAlchemy
-4. **Request Handling**: Flask request object → FastAPI dependency injection
-5. **Response**: Flask jsonify → FastAPI automatic JSON serialization
-6. **Templates**: Flask render_template → FastAPI Jinja2Templates
-7. **Routing**: Flask Blueprints → FastAPI APIRouter
+### `phone_auth` table (`PhoneAuthDB`)
+- Tracks OTP attempts and verification status
 
-### Removed Dependencies
-- Flask and flask-cors
-- Firebase Admin SDK
-- All Google Cloud libraries
-- Werkzeug, blinker, etc.
+---
 
-### Added Dependencies
-- FastAPI and uvicorn
-- SQLAlchemy
-- psycopg2-binary
-- Pydantic
+## 6. Next Steps & Recommendations
 
-## Testing
+1. **Complete QA** – Run the smoke test instructions above and document any issues.
+2. **Automate Tests (optional)** – Add pytest coverage if time permits.
+3. **Performance Review** – For high-traffic scenarios, consider caching minted/redeemed summary results or moving to aggregation queries directly against `credit_transactions`.
+4. **Visual Polish** – Iterate on dashboard styling once product requirements are finalized.
 
-The application includes test phone number support:
-- Test phone: Set via `TEST_PHONE_NUMBER` env variable (default: 7777777777)
-- Test OTP: Set via `TEST_OTP` env variable (default: 123456)
+Once testing is marked complete, the admin panel PR can be upgraded from Draft to Ready for Review.
 
-Use these for testing without sending actual SMS messages.
+---
 
-## Deployment
+## 7. Contributors & Ownership
 
-Update your deployment configuration to:
-1. Use `uvicorn` instead of Flask's built-in server
-2. Set DATABASE_URL environment variable
-3. Run database initialization before first deployment
-4. Update any reverse proxy configurations for ASGI instead of WSGI
+- **Aditya** – Core FastAPI skeleton, DB session, user CRUD.
+- **Jash** – Security (hashing/JWT, auth deps).
+- **Anushree** – Credits, transactions, leaderboard cache.
+- **Swaraj** – Admin metrics API, dashboard UI. ✅ Feature-complete, testing pending.
+- **Dayaan** – Vision service (image ingestion/CLIP).
+
+Please coordinate cross-team changes through the shared fork → draft PR workflow (see project guidelines).
+
+---
+
+Happy hacking! Reach out to @swaraj for admin-panel follow-ups or @aditya / @anushree for user/credits data dependencies. Continuous integration should cover `lint`, `typecheck`, and `pytest` once the GitHub Actions pipeline is finalized.

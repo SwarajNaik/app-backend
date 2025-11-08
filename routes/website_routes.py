@@ -27,6 +27,10 @@ async def route_home(request: Request, query: str = Query(None), db: Session = D
         return await search_users(request, query, db)
     return await home(request, db)
 
+@website_router.get("/dashboard", response_class=HTMLResponse)
+async def route_dashboard(request: Request):
+    return templates.TemplateResponse("dashboard.html", {"request": request})
+
 @website_router.get("/user/add", response_class=HTMLResponse)
 async def route_add_user_get(request: Request):
     return templates.TemplateResponse("AddUser.html", {"request": request})
