@@ -1,8 +1,7 @@
-from fastapi import APIRouter, Depends, Header, Query
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from controllers.admin_controller import (
-    auth_middleware,
     get_all_users,
     update_user_points,
     add_user,
@@ -13,15 +12,13 @@ from controllers.admin_controller import (
     get_points_summary,
     get_top_users,
     get_transactions_flat,
+    _iter_transactions,
 )
 from db import get_db
-import io
+from utils import verify_admin_token
 import csv
 
 admin_router = APIRouter()
-
-async def verify_admin_token(token: str = Header(None, alias="TOKEN")):
-    return auth_middleware(token)
 
 @admin_router.get('/users', dependencies=[Depends(verify_admin_token)])
 async def get_all_users_route(sort: str = Query(default="ascending"), db: Session = Depends(get_db)):
@@ -91,22 +88,43 @@ async def top_users_metric(limit: int = Query(default=10, ge=1, le=50), db: Sess
 
 @admin_router.get('/transactions/export.csv', dependencies=[Depends(verify_admin_token)])
 async def export_transactions_csv(db: Session = Depends(get_db)):
-    rows = await get_transactions_flat(db)
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow(["user_id", "type", "amount", "timestamp", "performed_by", "balance"])
-    for row in rows:
-        writer.writerow([
-            row.get("user_id"),
-            row.get("type"),
-            row.get("amount"),
-            row.get("timestamp"),
-            row.get("performed_by"),
-            row.get("balance"),
-        ])
-    output.seek(0)
+    """Stream CSV export as generator for large datasets."""
+    import io
+    
+    def generate_csv():
+        # Use StringIO buffer for csv.writer
+        buffer = io.StringIO()
+        writer = csv.writer(buffer)
+        
+        # Write header
+        writer.writerow(["user_id", "type", "amount", "timestamp", "performed_by", "balance"])
+        yield buffer.getvalue()
+        buffer.seek(0)
+        buffer.truncate(0)
+        
+        # Stream rows one by one
+        for user_id, entry in _iter_transactions(db):
+            tx_type = str(entry.get("type", "")).upper()
+            amount = entry.get("points", 0)
+            timestamp = entry.get("timestamp")
+            performed_by = entry.get("action_user")
+            balance = entry.get("balance")
+            
+            # Use csv.writer for proper escaping
+            writer.writerow([
+                user_id or "",
+                tx_type or "",
+                amount or "",
+                str(timestamp) if timestamp else "",
+                performed_by or "",
+                balance or "",
+            ])
+            yield buffer.getvalue()
+            buffer.seek(0)
+            buffer.truncate(0)
+    
     return StreamingResponse(
-        iter([output.getvalue()]),
+        generate_csv(),
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=transactions.csv"},
     )

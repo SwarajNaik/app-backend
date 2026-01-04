@@ -2,6 +2,8 @@ import requests
 from dotenv import load_dotenv
 import os
 import random
+from fastapi import Header, HTTPException
+import base64
 
 load_dotenv()
 
@@ -40,3 +42,11 @@ def send_otp(phone_number):
     
     except Exception as e:
         raise e
+
+
+async def verify_admin_token(token: str = Header(None, alias="TOKEN")):
+    """FastAPI dependency to verify admin token from TOKEN header."""
+    from controllers.admin_controller import auth_middleware
+    # auth_middleware raises HTTPException if invalid, so just call it
+    auth_middleware(token)
+    return True

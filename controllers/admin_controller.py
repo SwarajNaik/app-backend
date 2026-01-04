@@ -6,9 +6,10 @@ from models.user_model import User
 from models.database import UserDB
 import base64
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from collections import defaultdict
 from typing import Dict, List, Tuple, Any, Iterable, Optional
+from dateutil import parser as date_parser
 
 def auth_middleware(token: str):
     if not token:
@@ -155,21 +156,38 @@ def _iter_transactions(db: Session) -> Iterable[Tuple[str, Dict[str, Any]]]:
 
 
 def _parse_timestamp(value: Any) -> Optional[datetime]:
+    """Parse timestamp using dateutil.parser for robust ISO and timezone handling."""
     if not value:
         return None
     if isinstance(value, datetime):
+        # Ensure timezone-aware datetime
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
         return value
     if isinstance(value, (int, float)):
         try:
-            return datetime.fromtimestamp(value)
+            dt = datetime.fromtimestamp(value, tz=timezone.utc)
+            return dt
         except Exception:
             return None
     if isinstance(value, str):
-        for fmt in ("%d-%m-%Y %H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
-            try:
-                return datetime.strptime(value, fmt)
-            except ValueError:
-                continue
+        try:
+            # Use dateutil.parser for robust parsing of ISO and timezone-aware timestamps
+            dt = date_parser.parse(value)
+            # Normalize to UTC if timezone-aware, otherwise assume UTC
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            else:
+                dt = dt.astimezone(timezone.utc)
+            return dt
+        except (ValueError, TypeError):
+            # Fallback to common formats if dateutil fails
+            for fmt in ("%d-%m-%Y %H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+                try:
+                    dt = datetime.strptime(value, fmt)
+                    return dt.replace(tzinfo=timezone.utc)
+                except ValueError:
+                    continue
     return None
 
 
@@ -180,8 +198,10 @@ async def get_points_summary(db: Session, days: int = 7) -> Dict[str, Any]:
         minted_by_day: Dict[str, float] = defaultdict(float)
         redeemed_by_day: Dict[str, float] = defaultdict(float)
 
-        window_start_date = datetime.utcnow().date() - timedelta(days=days - 1)
-        window_start = datetime.combine(window_start_date, datetime.min.time())
+        # Use timezone-aware datetime for comparisons
+        now_utc = datetime.now(timezone.utc)
+        window_start_date = now_utc.date() - timedelta(days=days - 1)
+        window_start = datetime.combine(window_start_date, datetime.min.time(), tzinfo=timezone.utc)
 
         for user_id, entry in _iter_transactions(db):
             tx_type = str(entry.get("type", "")).upper()
@@ -194,15 +214,20 @@ async def get_points_summary(db: Session, days: int = 7) -> Dict[str, Any]:
             ts = _parse_timestamp(entry.get("timestamp"))
             bucket = None
             if ts:
+                # Normalize timestamp to UTC for comparison
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+                else:
+                    ts = ts.astimezone(timezone.utc)
                 bucket = ts.strftime("%Y-%m-%d")
 
             if tx_type == "ALLOCATE":
                 minted_total += amount
-                if bucket and ts >= window_start:
+                if bucket and ts and ts >= window_start:
                     minted_by_day[bucket] += amount
             elif tx_type == "REDEEM":
                 redeemed_total += abs(amount)
-                if bucket and ts >= window_start:
+                if bucket and ts and ts >= window_start:
                     redeemed_by_day[bucket] += abs(amount)
 
         def _series_map(source: Dict[str, float]) -> List[Tuple[str, float]]:
@@ -240,10 +265,14 @@ async def get_points_summary(db: Session, days: int = 7) -> Dict[str, Any]:
 
 async def get_daily_signups(db: Session, days: int = 7) -> Dict[str, Any]:
     try:
-        end_date = datetime.utcnow().date()
+        # Use timezone-aware datetime for comparisons
+        now_utc = datetime.now(timezone.utc)
+        end_date = now_utc.date()
         start_date = end_date - timedelta(days=days - 1)
-        start_datetime = datetime.combine(start_date, datetime.min.time())
+        start_datetime = datetime.combine(start_date, datetime.min.time(), tzinfo=timezone.utc)
 
+        # Ensure created_at comparison is timezone-aware
+        # PostgreSQL stores created_at as timezone-aware, but we normalize the filter
         results = (
             db.query(
                 func.date_trunc("day", UserDB.created_at).label("day"),
@@ -294,7 +323,9 @@ async def get_transactions_flat(db: Session) -> List[Dict[str, Any]]:
                     "balance": balance,
                 }
             )
-        transactions.sort(key=lambda item: _parse_timestamp(item.get("timestamp")) or datetime.min, reverse=True)
+        # Sort with timezone-aware comparison
+        min_dt = datetime.min.replace(tzinfo=timezone.utc)
+        transactions.sort(key=lambda item: _parse_timestamp(item.get("timestamp")) or min_dt, reverse=True)
         return transactions
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
